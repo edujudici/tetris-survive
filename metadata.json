@@ -1,0 +1,5 @@
+{
+  "name": "Sobreviva ao Tetris",
+  "description": "Um jogo de sobrevivência em ritmo acelerado onde você controla um personagem que deve desviar de blocos de Tetris que caem e escalar a pilha para não ser esmagado.",
+  "requestFramePermissions": []
+}
