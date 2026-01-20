@@ -1,9 +1,23 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { GRID_SIZE, COLUMNS, CANVAS_WIDTH, CANVAS_HEIGHT, GRAVITY, JUMP_FORCE, PLAYER_SPEED, DIFFICULTY_CONFIG, DifficultyLevel } from './constants';
+import { GRID_SIZE, COLUMNS, ROWS, CANVAS_WIDTH, CANVAS_HEIGHT, GRAVITY, JUMP_FORCE, PLAYER_SPEED, DIFFICULTY_CONFIG, DifficultyLevel } from './constants';
 import { Position, Tetromino, TetrominoType, Player, COLORS, SHAPES } from './types';
 
-const DEFAULT_SKIN = { id: 'classic', color: '#4ade80', name: 'Clássico' };
+interface Skin {
+  id: string;
+  color: string;
+  name: string;
+  price?: number;
+}
+
+const SKINS: Skin[] = [
+  { id: 'classic', color: '#4ade80', name: 'Clássico' },
+  { id: 'neon', color: '#22d3ee', name: 'Ciano Neon' },
+  { id: 'ruby', color: '#f87171', name: 'Rubi' },
+  { id: 'gold', color: '#fbbf24', name: 'Ouro' },
+  { id: 'purple', color: '#a78bfa', name: 'Ametista' },
+  { id: 'ghost', color: '#f1f5f9', name: 'Fantasma' },
+];
 
 const levelConfigs = [
   { timeLimit: 120, baseSpawn: 2000, baseSpeed: 2.5, label: "Vale dos Blocos" },
@@ -13,57 +27,26 @@ const levelConfigs = [
   { timeLimit: 120, baseSpawn: 700, baseSpeed: 7.0, label: "O Confronto Final" }
 ];
 
-const TetrisPieceButton: React.FC<{ onClick: () => void }> = ({ onClick }) => {
-  // Representação de uma peça "T" invertida para o botão
-  const color = COLORS.T;
-  const blocks = [
-    [0, 1, 0],
-    [1, 1, 1]
-  ];
-
-  return (
-    <button 
-      onClick={onClick}
-      className="group relative flex flex-col items-center justify-center p-2 transition-transform hover:scale-105 active:scale-95 focus:outline-none"
-    >
-      <div className="flex flex-col gap-1">
-        {blocks.map((row, rowIndex) => (
-          <div key={rowIndex} className="flex gap-1 justify-center">
-            {row.map((cell, cellIndex) => (
-              <div
-                key={cellIndex}
-                className={`w-10 h-10 rounded-sm shadow-[inset_-4px_-4px_0px_rgba(0,0,0,0.3),inset_4px_4px_0px_rgba(255,255,255,0.2)] transition-colors duration-300 ${
-                  cell ? '' : 'opacity-0'
-                }`}
-                style={{ backgroundColor: cell ? color : 'transparent' }}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-white font-black text-xs uppercase tracking-widest drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)] group-hover:text-cyan-200 transition-colors">
-          Treinamento
-        </span>
-      </div>
-    </button>
-  );
-};
-
 const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [gameState, setGameState] = useState<'REGISTER' | 'TUTORIAL' | 'IDLE' | 'TREINAMENTO_MENU' | 'MAPA' | 'PLAYING' | 'GAMEOVER' | 'VICTORY'>('REGISTER');
+  const [gameState, setGameState] = useState<'REGISTER' | 'IDLE' | 'TREINAMENTO_MENU' | 'MAPA' | 'PLAYING' | 'GAMEOVER' | 'VICTORY' | 'LOCKER'>('REGISTER');
   const [difficulty, setDifficulty] = useState<DifficultyLevel>('MEDIO');
   const [currentLevel, setCurrentLevel] = useState<number | null>(null);
   const [unlockedLevels, setUnlockedLevels] = useState<number>(1);
   const [score, setScore] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
   const [isClearing, setIsClearing] = useState(false);
+  const [isEmergencyFlash, setIsEmergencyFlash] = useState(false);
   const [playerName, setPlayerName] = useState<string>('');
-  const [tutorialStep, setTutorialStep] = useState(0);
+  const [inactivityTime, setInactivityTime] = useState(0); 
+  const [isMobile, setIsMobile] = useState(false);
   
+  const [currentSkin, setCurrentSkin] = useState<Skin>(() => {
+    const saved = localStorage.getItem('tetris_selected_skin');
+    return saved ? JSON.parse(saved) : SKINS[0];
+  });
+
   const [highScore, setHighScore] = useState<number>(() => Number(localStorage.getItem('tetris_high_score')) || 0);
-  const [highScoreDifficulty, setHighScoreDifficulty] = useState<string>(() => localStorage.getItem('tetris_high_diff') || '-');
 
   const playerRef = useRef<Player>({ x: (CANVAS_WIDTH / 2) - 15, y: CANVAS_HEIGHT - 45, width: 28, height: 35, vx: 0, vy: 0, isJumping: false });
   const staticBlocksRef = useRef<{x: number, y: number, color: string}[]>([]);
@@ -72,6 +55,7 @@ const App: React.FC = () => {
   const requestRef = useRef<number>(undefined);
   const lastSpawnTimeRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
+  const lastMovementTimeRef = useRef<number>(0);
 
   useEffect(() => {
     const savedName = localStorage.getItem('tetris_player_name');
@@ -79,35 +63,28 @@ const App: React.FC = () => {
       setPlayerName(savedName);
       setGameState('IDLE');
     }
+    setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0);
   }, []);
 
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
     if (playerName.trim().length >= 2) {
       localStorage.setItem('tetris_player_name', playerName.trim());
-      setGameState('TUTORIAL');
+      setGameState('IDLE');
     }
   };
 
-  const getDifficultySigla = (diff: DifficultyLevel) => {
-    switch(diff) {
-      case 'FACIL': return 'F';
-      case 'MEDIO': return 'M';
-      case 'DIFICIL': return 'D';
-      case 'HARD': return 'H';
-      default: return '?';
-    }
+  const selectSkin = (skin: Skin) => {
+    setCurrentSkin(skin);
+    localStorage.setItem('tetris_selected_skin', JSON.stringify(skin));
   };
 
   const checkHighScore = useCallback((finalScore: number) => {
     if (finalScore > highScore) {
-      const sigla = getDifficultySigla(difficulty);
       setHighScore(finalScore);
-      setHighScoreDifficulty(sigla);
       localStorage.setItem('tetris_high_score', finalScore.toString());
-      localStorage.setItem('tetris_high_diff', sigla);
     }
-  }, [highScore, difficulty]);
+  }, [highScore]);
 
   const spawnTetromino = useCallback(() => {
     const types: TetrominoType[] = ['I', 'J', 'L', 'O', 'S', 'T', 'Z', 'TRIO'];
@@ -119,26 +96,71 @@ const App: React.FC = () => {
     fallingBlocksRef.current.push(newBlock);
   }, []);
 
-  const resetGame = (level: DifficultyLevel, advLevel: number | null = null, isTut = false) => {
+  const checkLines = useCallback(() => {
+    const blocks = staticBlocksRef.current;
+    const isTooHigh = blocks.some(b => b.y <= GRID_SIZE * 2);
+    if (isTooHigh) {
+      setIsEmergencyFlash(true);
+      setScore(prev => prev + 1000);
+      setTimeout(() => {
+        staticBlocksRef.current = [];
+        setIsEmergencyFlash(false);
+      }, 200);
+      return;
+    }
+
+    const linesToClear: number[] = [];
+    for (let y = 0; y < CANVAS_HEIGHT; y += GRID_SIZE) {
+      const blocksInLine = blocks.filter(b => b.y === y);
+      if (blocksInLine.length >= COLUMNS) linesToClear.push(y);
+    }
+
+    if (linesToClear.length > 0) {
+      setIsClearing(true);
+      setScore(prev => prev + (linesToClear.length * 500));
+      setTimeout(() => {
+        let newBlocks = staticBlocksRef.current.filter(b => !linesToClear.includes(b.y));
+        linesToClear.sort((a, b) => a - b).forEach(lineY => {
+          newBlocks = newBlocks.map(b => (b.y < lineY ? { ...b, y: b.y + GRID_SIZE } : b));
+          if (playerRef.current.y < lineY) playerRef.current.y += GRID_SIZE;
+        });
+        staticBlocksRef.current = newBlocks;
+        setIsClearing(false);
+      }, 150);
+    }
+  }, []);
+
+  const resetGame = (level: DifficultyLevel, advLevel: number | null = null) => {
     setDifficulty(level);
     setCurrentLevel(advLevel);
     playerRef.current = { x: (CANVAS_WIDTH / 2) - 14, y: CANVAS_HEIGHT - 45, width: 28, height: 35, vx: 0, vy: 0, isJumping: false };
     staticBlocksRef.current = [];
     fallingBlocksRef.current = [];
     setScore(0);
+    setInactivityTime(0);
     setTimeLeft(advLevel ? levelConfigs[advLevel - 1].timeLimit : 0);
-    setGameState(isTut ? 'TUTORIAL' : 'PLAYING');
-    lastSpawnTimeRef.current = performance.now();
-    lastTimeRef.current = performance.now();
+    setGameState('PLAYING');
+    const now = performance.now();
+    lastSpawnTimeRef.current = now;
+    lastTimeRef.current = now;
+    lastMovementTimeRef.current = now;
   };
 
   const update = (time: number) => {
-    if (gameState !== 'PLAYING' && gameState !== 'TUTORIAL') return;
+    if (gameState !== 'PLAYING') return;
     
+    const timeSinceLastMove = time - lastMovementTimeRef.current;
+    setInactivityTime(timeSinceLastMove);
+    if (timeSinceLastMove > 5000) {
+      checkHighScore(score);
+      setGameState('GAMEOVER');
+      return;
+    }
+
     let spawnRate = DIFFICULTY_CONFIG[difficulty].spawnRate;
     let fallSpeed = DIFFICULTY_CONFIG[difficulty].fallSpeed;
 
-    if (currentLevel !== null && gameState === 'PLAYING') {
+    if (currentLevel !== null) {
       const dt = time - lastTimeRef.current;
       if (dt >= 1000) {
         setTimeLeft(prev => {
@@ -156,21 +178,6 @@ const App: React.FC = () => {
       }
     }
 
-    if (gameState === 'TUTORIAL') {
-      spawnRate = 4000;
-      fallSpeed = 1.5;
-      if (score >= 100) {
-         setTimeout(() => setGameState('IDLE'), 100);
-      }
-    } else if (currentLevel !== null) {
-      const cfg = levelConfigs[currentLevel - 1];
-      const diffMod = DIFFICULTY_CONFIG[difficulty];
-      const spawnRatio = diffMod.spawnRate / 1500;
-      const speedRatio = diffMod.fallSpeed / 3.0;
-      spawnRate = cfg.baseSpawn * spawnRatio;
-      fallSpeed = cfg.baseSpeed * speedRatio;
-    }
-
     if (time - lastSpawnTimeRef.current > spawnRate) {
       spawnTetromino();
       lastSpawnTimeRef.current = time;
@@ -178,54 +185,82 @@ const App: React.FC = () => {
     }
 
     const player = playerRef.current;
-    if (keysRef.current.has('ArrowLeft') || keysRef.current.has('a')) {
-        player.vx = -PLAYER_SPEED;
-        if (gameState === 'TUTORIAL' && tutorialStep === 0) setTutorialStep(1);
-    }
-    else if (keysRef.current.has('ArrowRight') || keysRef.current.has('d')) {
-        player.vx = PLAYER_SPEED;
-        if (gameState === 'TUTORIAL' && tutorialStep === 0) setTutorialStep(1);
-    }
+    const isMoving = keysRef.current.has('ArrowLeft') || keysRef.current.has('a') || keysRef.current.has('A') || 
+                     keysRef.current.has('ArrowRight') || keysRef.current.has('d') || keysRef.current.has('D') ||
+                     keysRef.current.has('ArrowUp') || keysRef.current.has(' ') || keysRef.current.has('w') || keysRef.current.has('W');
+    
+    if (isMoving) lastMovementTimeRef.current = time;
+
+    if (keysRef.current.has('ArrowLeft') || keysRef.current.has('a') || keysRef.current.has('A')) player.vx = -PLAYER_SPEED;
+    else if (keysRef.current.has('ArrowRight') || keysRef.current.has('d') || keysRef.current.has('D')) player.vx = PLAYER_SPEED;
     else player.vx = 0;
 
-    if ((keysRef.current.has('ArrowUp') || keysRef.current.has(' ')) && !player.isJumping) {
+    const nextX = player.x + player.vx;
+    let canMoveX = true;
+    if (nextX < 0 || nextX + player.width > CANVAS_WIDTH) canMoveX = false;
+    else {
+      for (const sb of staticBlocksRef.current) {
+        if (nextX < sb.x + GRID_SIZE && nextX + player.width > sb.x && 
+            player.y + 4 < sb.y + GRID_SIZE && player.y + player.height - 4 > sb.y) {
+          canMoveX = false;
+          break;
+        }
+      }
+    }
+    if (canMoveX) player.x = nextX;
+
+    if ((keysRef.current.has('ArrowUp') || keysRef.current.has(' ') || keysRef.current.has('w') || keysRef.current.has('W')) && !player.isJumping) {
       player.vy = JUMP_FORCE;
       player.isJumping = true;
-      if (gameState === 'TUTORIAL' && tutorialStep === 1) setTutorialStep(2);
     }
 
     player.vy += GRAVITY;
-    player.x += player.vx;
-    player.y += player.vy;
-
-    if (player.x < 0) player.x = 0;
-    if (player.x + player.width > CANVAS_WIDTH) player.x = CANVAS_WIDTH - player.width;
-    if (player.y + player.height > CANVAS_HEIGHT) {
+    const nextY = player.y + player.vy;
+    let canMoveY = true;
+    if (nextY + player.height > CANVAS_HEIGHT) {
       player.y = CANVAS_HEIGHT - player.height;
       player.vy = 0;
       player.isJumping = false;
+      canMoveY = false;
+    } else {
+      for (const sb of staticBlocksRef.current) {
+        if (player.x < sb.x + GRID_SIZE && player.x + player.width > sb.x && 
+            nextY < sb.y + GRID_SIZE && nextY + player.height > sb.y) {
+          if (player.vy > 0) {
+            player.y = sb.y - player.height;
+            player.vy = 0;
+            player.isJumping = false;
+          } else {
+            player.y = sb.y + GRID_SIZE;
+            player.vy = 0;
+          }
+          canMoveY = false;
+          break;
+        }
+      }
     }
+    if (canMoveY) player.y = nextY;
 
     const nextFalling: Tetromino[] = [];
+    let shouldCheckLines = false;
     for (const block of fallingBlocksRef.current) {
       block.pos.y += fallSpeed;
       let settled = false;
       for (let row = 0; row < block.shape.length; row++) {
         for (let col = 0; col < block.shape[row].length; col++) {
           if (block.shape[row][col]) {
-            const by = block.pos.y + (row + 1) * GRID_SIZE;
-            if (by >= CANVAS_HEIGHT) settled = true;
             const bx = block.pos.x + col * GRID_SIZE;
-            const bby = block.pos.y + row * GRID_SIZE;
-            if (player.x < bx + GRID_SIZE && player.x + player.width > bx && player.y < bby + GRID_SIZE && player.y + player.height > bby) {
-               if (gameState !== 'TUTORIAL') {
-                 checkHighScore(score);
-                 setGameState('GAMEOVER');
-               }
+            const by = block.pos.y + row * GRID_SIZE;
+            if (player.x + 10 < bx + GRID_SIZE && player.x + player.width - 10 > bx && 
+                player.y + 10 < by + GRID_SIZE && player.y + player.height - 10 > by) {
+              checkHighScore(score);
+              setGameState('GAMEOVER');
             }
+            if (by + GRID_SIZE >= CANVAS_HEIGHT) settled = true;
           }
         }
       }
+
       if (!settled) {
         for (const sb of staticBlocksRef.current) {
           for (let row = 0; row < block.shape.length; row++) {
@@ -233,45 +268,34 @@ const App: React.FC = () => {
               if (block.shape[row][col]) {
                 const bx = block.pos.x + col * GRID_SIZE;
                 const by = block.pos.y + row * GRID_SIZE;
-                if (bx < sb.x + GRID_SIZE && bx + GRID_SIZE > sb.x && by + GRID_SIZE >= sb.y && by < sb.y + GRID_SIZE) settled = true;
+                if (bx < sb.x + GRID_SIZE && bx + GRID_SIZE > sb.x && 
+                    by + GRID_SIZE >= sb.y && by < sb.y + GRID_SIZE) settled = true;
               }
             }
           }
         }
       }
+
       if (settled) {
-        const snappedY = Math.floor(block.pos.y / GRID_SIZE) * GRID_SIZE;
+        const snappedY = Math.round(block.pos.y / GRID_SIZE) * GRID_SIZE;
         for (let row = 0; row < block.shape.length; row++) {
           for (let col = 0; col < block.shape[row].length; col++) {
-            if (block.shape[row][col]) staticBlocksRef.current.push({ x: block.pos.x + col * GRID_SIZE, y: snappedY + row * GRID_SIZE, color: block.color });
+            if (block.shape[row][col]) {
+              staticBlocksRef.current.push({ x: block.pos.x + col * GRID_SIZE, y: snappedY + row * GRID_SIZE, color: block.color });
+            }
           }
         }
-        if (gameState === 'TUTORIAL' && tutorialStep === 2) setTutorialStep(3);
+        shouldCheckLines = true;
       } else nextFalling.push(block);
     }
     fallingBlocksRef.current = nextFalling;
+    if (shouldCheckLines) checkLines();
 
-    for (const sb of staticBlocksRef.current) {
-      if (player.x < sb.x + GRID_SIZE && player.x + player.width > sb.x) {
-        if (player.y + player.height >= sb.y && player.y + player.height <= sb.y + 10 && player.vy >= 0) {
-          player.y = sb.y - player.height;
-          player.vy = 0;
-          player.isJumping = false;
-        }
-      }
-    }
-    
-    if (staticBlocksRef.current.some(b => b.y <= 0)) {
-        staticBlocksRef.current = [];
-        setScore(prev => prev + 100);
-        setIsClearing(true);
-        setTimeout(() => setIsClearing(false), 500);
-    }
-
-    if (player.y < -GRID_SIZE * 5) {
+    if (player.y < -GRID_SIZE * 2) {
       checkHighScore(score);
       setGameState('GAMEOVER');
     }
+
     draw();
     requestRef.current = requestAnimationFrame(update);
   };
@@ -279,26 +303,49 @@ const App: React.FC = () => {
   const draw = () => {
     const ctx = canvasRef.current?.getContext('2d');
     if (!ctx) return;
-    ctx.fillStyle = isClearing ? '#1e293b' : '#0f172a';
+    
+    if (isEmergencyFlash) {
+      ctx.fillStyle = '#ffffff';
+    } else {
+      ctx.fillStyle = isClearing ? '#334155' : '#0f172a';
+    }
+    
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     ctx.strokeStyle = '#1e293b';
-    for (let x = 0; x <= CANVAS_WIDTH; x += GRID_SIZE) { ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, CANVAS_HEIGHT); ctx.stroke(); }
-    for (let y = 0; y <= CANVAS_HEIGHT; y += GRID_SIZE) { ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(CANVAS_WIDTH, y + 0.5); ctx.stroke(); }
-    staticBlocksRef.current.forEach(b => { ctx.fillStyle = b.color; ctx.fillRect(b.x + 1, b.y + 1, GRID_SIZE - 2, GRID_SIZE - 2); });
+    for (let x = 0; x <= CANVAS_WIDTH; x += GRID_SIZE) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_HEIGHT); ctx.stroke(); }
+    for (let y = 0; y <= CANVAS_HEIGHT; y += GRID_SIZE) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_WIDTH, y); ctx.stroke(); }
+    
+    staticBlocksRef.current.forEach(b => { 
+      ctx.fillStyle = b.color; 
+      ctx.fillRect(b.x + 1, b.y + 1, GRID_SIZE - 2, GRID_SIZE - 2); 
+    });
+    
     fallingBlocksRef.current.forEach(block => {
       ctx.fillStyle = block.color;
-      for (let row = 0; row < block.shape.length; row++) {
-        for (let col = 0; col < block.shape[row].length; col++) {
-          if (block.shape[row][col]) ctx.fillRect(Math.round(block.pos.x + col * GRID_SIZE) + 1, Math.round(block.pos.y + row * GRID_SIZE) + 1, GRID_SIZE - 2, GRID_SIZE - 2);
-        }
-      }
+      block.shape.forEach((row, rIdx) => {
+        row.forEach((cell, cIdx) => {
+          if (cell) ctx.fillRect(block.pos.x + cIdx * GRID_SIZE + 1, block.pos.y + rIdx * GRID_SIZE + 1, GRID_SIZE - 2, GRID_SIZE - 2);
+        });
+      });
     });
+    
     const p = playerRef.current;
-    ctx.fillStyle = DEFAULT_SKIN.color;
+    ctx.fillStyle = currentSkin.color;
     ctx.fillRect(Math.round(p.x), Math.round(p.y), p.width, p.height);
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.fillRect(Math.round(p.x + p.width * 0.2), Math.round(p.y + p.height * 0.2), 4, 4);
-    ctx.fillRect(Math.round(p.x + p.width * 0.6), Math.round(p.y + p.height * 0.2), 4, 4);
+    // Adiciona um detalhe de olho
+    ctx.fillStyle = '#000';
+    ctx.fillRect(Math.round(p.x) + 18, Math.round(p.y) + 8, 4, 4);
+
+    if (inactivityTime > 3000) {
+      const alpha = ((inactivityTime - 3000) / 2000) * 0.3;
+      ctx.fillStyle = `rgba(255, 0, 0, ${alpha})`;
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+  };
+
+  const handleMobileInput = (key: string, isDown: boolean) => {
+    if (isDown) keysRef.current.add(key);
+    else keysRef.current.delete(key);
   };
 
   useEffect(() => {
@@ -312,167 +359,204 @@ const App: React.FC = () => {
       window.removeEventListener('keyup', handleKeyUp);
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [gameState, difficulty, isClearing, score, tutorialStep]);
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  }, [gameState, difficulty, isClearing, score, isEmergencyFlash, currentSkin]);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-slate-900 text-white select-none font-sans overflow-hidden">
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-slate-900 text-white select-none font-sans overflow-hidden touch-none">
       {gameState === 'REGISTER' && (
-        <div className="flex flex-col items-center gap-8 animate-in fade-in zoom-in duration-500">
-           <h1 className="text-5xl font-black text-cyan-400 italic tracking-tighter drop-shadow-lg">BEM-VINDO</h1>
-           <form onSubmit={handleRegister} className="flex flex-col gap-4 items-center">
-              <label className="text-xs font-bold uppercase tracking-[0.4em] text-white/50">Insira seu Codinome</label>
-              <input 
-                type="text" 
-                maxLength={12}
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
-                className="bg-slate-800 border-2 border-cyan-500/30 rounded-xl px-6 py-4 text-2xl font-black text-center text-white focus:outline-none focus:border-cyan-400 transition-all shadow-xl"
-                placeholder="NOME"
-                autoFocus
-              />
-              <button className="mt-4 px-12 py-4 bg-cyan-500 hover:bg-cyan-400 rounded-xl font-black uppercase tracking-widest shadow-[0_4px_0_0_#0891b2] active:translate-y-1 transition-all">Iniciar</button>
-           </form>
+        <div className="flex flex-col items-center gap-8">
+          <h1 className="text-5xl font-black text-cyan-400 italic text-center leading-tight">SOBREVIVA AO<br/>TETRIS</h1>
+          <form onSubmit={handleRegister} className="flex flex-col gap-4 items-center">
+            <input type="text" maxLength={12} value={playerName} onChange={(e) => setPlayerName(e.target.value)} className="bg-slate-800 border-2 border-cyan-500/30 rounded-xl px-6 py-4 text-2xl font-black text-center" placeholder="SEU NOME" autoFocus />
+            <button className="px-12 py-4 bg-cyan-500 rounded-xl font-black uppercase">Entrar</button>
+          </form>
         </div>
       )}
 
-      {(gameState !== 'REGISTER') && (
-        <>
-          <div className="flex flex-col items-center mb-6 text-center">
-            <h1 className="text-4xl font-black text-white italic tracking-tighter drop-shadow-[0_0_15px_rgba(34,211,238,0.7)]">
-              <span className="text-cyan-400">SOBREVIVA</span> AO TETRIS
-            </h1>
-          </div>
-          
-          <div className="relative border-4 border-slate-800 rounded-xl shadow-2xl bg-slate-950 overflow-hidden" style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}>
-            {(gameState === 'PLAYING' || gameState === 'TUTORIAL') && (
-              <>
-                <canvas ref={canvasRef} width={CANVAS_WIDTH} height={CANVAS_HEIGHT} className="block" />
-                {gameState === 'TUTORIAL' && (
-                  <div className="absolute inset-x-0 top-20 flex flex-col items-center pointer-events-none px-10">
-                    <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border-2 border-cyan-500/50 text-center animate-bounce">
-                      <p className="text-xl font-black uppercase italic text-cyan-400">Tutorial de Campo</p>
-                      <p className="text-sm font-bold mt-2">
-                        {tutorialStep === 0 && "Use A e D para se mover horizontalmente"}
-                        {tutorialStep === 1 && "Pressione ESPAÇO para pular"}
-                        {tutorialStep === 2 && "Não deixe os blocos te esmagarem!"}
-                        {tutorialStep === 3 && "Suba nos blocos para sobreviver!"}
-                      </p>
+      {gameState !== 'REGISTER' && (
+        <div className="relative border-4 border-slate-800 rounded-xl shadow-2xl bg-slate-950 overflow-hidden" style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}>
+          {gameState === 'PLAYING' && (
+            <>
+              <canvas ref={canvasRef} width={CANVAS_WIDTH} height={CANVAS_HEIGHT} className="block" />
+              <button 
+                onClick={() => setGameState('IDLE')} 
+                className="absolute top-4 left-4 z-20 bg-slate-900/80 hover:bg-red-500 text-white p-2 rounded-lg transition-colors border border-slate-700 shadow-lg"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+              </button>
+
+              <div className="absolute top-4 right-4 bg-slate-900/90 px-4 py-2 rounded-lg text-2xl font-mono border border-slate-700 text-cyan-400 tabular-nums z-10">
+                {score.toString().padStart(6, '0')}
+              </div>
+              
+              {currentLevel && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-yellow-500 px-4 py-1 rounded-full font-black text-yellow-950 z-10">
+                  {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+                </div>
+              )}
+
+              {isMobile && (
+                <div className="absolute inset-0 pointer-events-none z-30 flex flex-col justify-end p-6">
+                  <div className="flex justify-between items-end w-full">
+                    <div className="flex gap-4 pointer-events-auto">
+                      <button onPointerDown={() => handleMobileInput('ArrowLeft', true)} onPointerUp={() => handleMobileInput('ArrowLeft', false)} className="w-20 h-20 bg-slate-800/60 rounded-2xl flex items-center justify-center border-2 border-slate-600"><svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M15 19l-7-7 7-7" /></svg></button>
+                      <button onPointerDown={() => handleMobileInput('ArrowRight', true)} onPointerUp={() => handleMobileInput('ArrowRight', false)} className="w-20 h-20 bg-slate-800/60 rounded-2xl flex items-center justify-center border-2 border-slate-600"><svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M9 5l7 7-7 7" /></svg></button>
+                    </div>
+                    <div className="pointer-events-auto">
+                      <button onPointerDown={() => handleMobileInput(' ', true)} onPointerUp={() => handleMobileInput(' ', false)} className="w-24 h-24 bg-yellow-500/40 rounded-full flex items-center justify-center border-4 border-yellow-500/60"><span className="text-white font-black text-xl italic uppercase">PULO</span></button>
                     </div>
                   </div>
-                )}
-              </>
-            )}
-
-            {gameState === 'IDLE' && (
-              <div className="absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center gap-6">
-                <div className="text-center mb-2">
-                  <p className="text-[10px] font-black text-white/30 uppercase tracking-[0.5em]">Operador Ativo</p>
-                  <p className="text-2xl font-black text-white italic uppercase tracking-tighter">{playerName}</p>
                 </div>
+              )}
+            </>
+          )}
 
-                <div className="bg-slate-800/80 p-4 rounded-2xl border-2 border-cyan-500/30 flex flex-col items-center shadow-lg shadow-cyan-500/10">
-                  <span className="text-[10px] font-black text-cyan-400 uppercase tracking-[0.3em] mb-1">Recorde Global</span>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-4xl font-black text-white tabular-nums">{highScore.toLocaleString()}</span>
-                    <span className="text-lg font-black text-cyan-500 bg-cyan-500/10 px-2 rounded">{highScoreDifficulty}</span>
+          {gameState === 'IDLE' && (
+            <div className="absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center gap-4 p-6 pt-12">
+              {/* Botão Vestiário Pequeno no Topo */}
+              <button 
+                onClick={() => setGameState('LOCKER')} 
+                className="absolute top-6 left-6 flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-purple-500/40 hover:bg-purple-900/20 transition-all scale-90"
+              >
+                <div className="w-6 h-6 rounded flex items-center justify-center shadow-inner" style={{ backgroundColor: currentSkin.color }}>
+                  <div className="w-1.5 h-1.5 bg-black rounded-full ml-2 -mt-1"></div>
+                </div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-purple-300">Vestiário</span>
+              </button>
+
+              <div className="flex items-center gap-4 mb-2">
+                <div className="w-16 h-16 rounded-xl border-2 border-cyan-500/50 flex items-center justify-center overflow-hidden" style={{ backgroundColor: currentSkin.color }}>
+                  <div className="w-4 h-4 bg-black rounded-full ml-4 -mt-4"></div>
+                </div>
+                <div>
+                  <h2 className="text-3xl font-black italic text-cyan-400 uppercase">{playerName}</h2>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Mestre Escalador</p>
+                </div>
+              </div>
+              
+              <div className="w-full max-w-xs mb-2">
+                <div className="bg-slate-800 p-4 rounded-xl border border-cyan-500/30 text-center">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Recorde Global</span>
+                  <p className="text-3xl font-black text-white drop-shadow-[0_0_8px_rgba(34,211,238,0.4)]">{highScore.toLocaleString()}</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3 w-64 items-center">
+                <button 
+                  onClick={() => setGameState('TREINAMENTO_MENU')} 
+                  className="group relative w-full h-24 overflow-hidden rounded-lg transition-all hover:scale-105 active:scale-95 shadow-xl"
+                >
+                  <div className="absolute inset-0 grid grid-cols-3 grid-rows-2 gap-1 p-1 bg-slate-700">
+                    <div className="invisible"></div>
+                    <div className="bg-purple-600 rounded border-t-2 border-l-2 border-purple-400"></div>
+                    <div className="invisible"></div>
+                    <div className="bg-purple-600 rounded border-t-2 border-l-2 border-purple-400"></div>
+                    <div className="bg-purple-600 rounded border-t-2 border-l-2 border-purple-400"></div>
+                    <div className="bg-purple-600 rounded border-t-2 border-l-2 border-purple-400"></div>
                   </div>
-                </div>
-
-                <div className="flex flex-col gap-6 items-center mt-4">
-                  <TetrisPieceButton onClick={() => setGameState('TREINAMENTO_MENU')} />
-                  <button onClick={() => setGameState('MAPA')} className="px-8 py-4 bg-gradient-to-b from-pink-400 to-purple-600 rounded-xl font-black text-white shadow-[0_4px_0_0_#9333ea] hover:translate-y-1 active:translate-y-2 transition-all w-[220px] uppercase">Aventura</button>
-                </div>
-              </div>
-            )}
-
-            {gameState === 'TREINAMENTO_MENU' && (
-              <div className="absolute inset-0 bg-slate-900/98 flex flex-col items-center justify-center gap-3 p-6">
-                <h2 className="text-xl font-black mb-4 uppercase tracking-widest text-cyan-400 border-b-2 border-cyan-400/30 pb-1">Dificuldade Livre</h2>
-                {(Object.keys(DIFFICULTY_CONFIG) as DifficultyLevel[]).map((level) => (
-                   <button key={level} onClick={() => resetGame(level)} className={`w-[220px] h-12 rounded-xl font-black uppercase tracking-widest transition-all ${DIFFICULTY_CONFIG[level].color} shadow-lg hover:scale-105 active:scale-95 text-white`}>
-                     {DIFFICULTY_CONFIG[level].label}
-                   </button>
-                ))}
-                <button onClick={() => setGameState('IDLE')} className="mt-4 text-slate-400 font-bold uppercase text-xs hover:text-white transition-colors">← Voltar</button>
-              </div>
-            )}
-
-            {gameState === 'MAPA' && (
-              <div className="absolute inset-0 bg-blue-600 flex flex-col items-center p-8 overflow-y-auto">
-                <button onClick={() => setGameState('IDLE')} className="absolute top-4 left-4 text-white font-bold bg-white/20 p-2 px-4 rounded-full text-xs uppercase z-20 hover:bg-white/40">VOLTAR</button>
-                <div className="flex flex-col items-center mb-8">
-                  <h2 className="text-3xl font-black text-white drop-shadow-md uppercase tracking-tighter mb-4">Aventura</h2>
-                  <div className="bg-blue-800/50 p-1 rounded-xl flex gap-1 border border-white/20">
-                    {(Object.keys(DIFFICULTY_CONFIG) as DifficultyLevel[]).map((level) => (
-                      <button key={level} onClick={() => setDifficulty(level)} className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${difficulty === level ? 'bg-white text-blue-800 scale-105 shadow-md' : 'text-white/60 hover:text-white'}`}>{getDifficultySigla(level)}</button>
-                    ))}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none mt-2">
+                    <span className="text-white font-black uppercase text-lg drop-shadow-[0_2px_4px_rgba(0,0,0,1)]">Treinamento</span>
                   </div>
-                </div>
-                <div className="relative w-full flex flex-col items-center gap-16 py-10">
-                  <div className="absolute w-2 bg-white/30 h-full left-1/2 -translate-x-1/2 top-0 border-dashed border-2" />
-                  {levelConfigs.map((cfg, i) => {
-                    const lvl = i + 1;
-                    const isUnlocked = lvl <= unlockedLevels;
-                    return (
-                      <button key={lvl} disabled={!isUnlocked} onClick={() => resetGame(difficulty, lvl)} className={`relative z-10 w-24 h-24 rounded-full border-4 flex items-center justify-center text-3xl font-black shadow-xl transition-transform active:scale-90 ${isUnlocked ? 'bg-yellow-400 border-yellow-200 text-yellow-800 animate-bounce' : 'bg-slate-400 border-slate-300 text-slate-600 grayscale opacity-60'}`}>
-                        {isUnlocked ? lvl : '🔒'}
-                        <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-[10px] font-black text-white uppercase whitespace-nowrap">{cfg.label}</div>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            {gameState === 'GAMEOVER' && (
-              <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center text-center p-6 z-50">
-                <h2 className="text-5xl font-black mb-4 text-red-500 tracking-tighter uppercase italic">Esmagado!</h2>
-                <div className="mb-6"><p className="text-white/60 text-sm font-bold uppercase tracking-widest">Sua Pontuação</p><p className="text-3xl font-black text-white">{score.toLocaleString()}</p></div>
-                <button onClick={() => setGameState(currentLevel ? 'MAPA' : 'TREINAMENTO_MENU')} className="px-10 py-4 bg-cyan-500 text-white font-black rounded-xl hover:bg-cyan-400 active:scale-95">Tentar Denovo</button>
-                <button onClick={() => setGameState('IDLE')} className="mt-6 text-slate-400 font-bold uppercase text-xs hover:text-white transition-colors">Menu Principal</button>
-              </div>
-            )}
-
-            {gameState === 'VICTORY' && (
-              <div className="absolute inset-0 bg-emerald-500 flex flex-col items-center justify-center text-center p-6 z-50">
-                <h2 className="text-5xl font-black mb-4 text-white drop-shadow-lg animate-pulse uppercase italic">Vitória!</h2>
-                <div className="mb-6"><p className="text-emerald-900/60 text-sm font-bold uppercase tracking-widest">Pontuação Final</p><p className="text-3xl font-black text-white">{score.toLocaleString()}</p></div>
-                <button onClick={() => setGameState('MAPA')} className="px-10 py-4 bg-white text-emerald-600 font-black rounded-xl shadow-xl hover:scale-105 transition-transform">Continuar</button>
-              </div>
-            )}
-
-            {(gameState === 'PLAYING' || gameState === 'TUTORIAL') && (
-              <>
-                <div className="absolute top-4 right-4 bg-slate-900/90 px-4 py-2 rounded-lg text-2xl font-mono border border-slate-700 text-cyan-400 z-10 tabular-nums">
-                  {score.toString().padStart(6, '0')}
-                </div>
-                {currentLevel && (
-                   <div className="absolute top-4 left-1/2 -translate-x-1/2 flex flex-col items-center z-10">
-                      <div className="bg-yellow-500 px-6 py-2 rounded-full border-2 border-yellow-200 shadow-lg animate-pulse">
-                         <span className="text-xl font-black text-yellow-950 tabular-nums">{formatTime(timeLeft)}</span>
-                      </div>
-                      <span className="text-[10px] font-black uppercase text-yellow-400 mt-1 tracking-widest bg-black/40 px-2 rounded">Sobreviva!</span>
-                   </div>
-                )}
-                <button onClick={() => setGameState('IDLE')} className="absolute top-4 left-4 z-10 bg-slate-900/80 hover:bg-red-500 text-white p-2 rounded-lg transition-colors border border-slate-700">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
                 </button>
-              </>
-            )}
-          </div>
 
-          <div className="mt-8 flex gap-8 text-slate-500 text-[10px] font-black tracking-widest uppercase">
-            <div className="flex items-center gap-2"><kbd className="px-2 py-1 bg-slate-800 rounded border-b-2 border-slate-950 text-white">WASD</kbd><span>Mover</span></div>
-            <div className="flex items-center gap-2"><kbd className="px-2 py-1 bg-slate-800 rounded border-b-2 border-slate-950 text-white">ESPAÇO</kbd><span>Pular</span></div>
-          </div>
-        </>
+                <button onClick={() => setGameState('MAPA')} className="w-full py-5 bg-cyan-500 rounded-xl font-black uppercase shadow-[0_4px_0_0_#0891b2] active:translate-y-1 transition-all text-xl">Aventura</button>
+              </div>
+            </div>
+          )}
+
+          {gameState === 'LOCKER' && (
+            <div className="absolute inset-0 bg-slate-900 flex flex-col p-6 overflow-hidden">
+               <button onClick={() => setGameState('IDLE')} className="self-start bg-slate-800 px-4 py-2 rounded-full text-xs font-bold uppercase mb-6 flex items-center gap-2 border border-slate-700">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                Voltar
+              </button>
+              
+              <h2 className="text-3xl font-black text-white italic uppercase mb-8">Vestiário</h2>
+              
+              <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                <div className="grid grid-cols-2 gap-4">
+                  {SKINS.map((skin) => (
+                    <button 
+                      key={skin.id}
+                      onClick={() => selectSkin(skin)}
+                      className={`relative flex flex-col items-center p-4 rounded-2xl border-4 transition-all ${currentSkin.id === skin.id ? 'border-cyan-500 bg-cyan-500/10 scale-105' : 'border-slate-800 bg-slate-800 hover:border-slate-700'}`}
+                    >
+                      <div className="w-16 h-16 rounded-lg mb-3 shadow-lg flex items-center justify-center" style={{ backgroundColor: skin.color }}>
+                         <div className="w-4 h-4 bg-black rounded-full ml-4 -mt-4"></div>
+                      </div>
+                      <span className="font-black uppercase text-xs text-center">{skin.name}</span>
+                      {currentSkin.id === skin.id && (
+                        <div className="absolute -top-2 -right-2 bg-cyan-500 text-slate-950 p-1 rounded-full">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-6 p-4 bg-slate-800 rounded-2xl border border-slate-700 flex items-center gap-4">
+                 <div className="w-12 h-12 rounded-lg" style={{ backgroundColor: currentSkin.color }}></div>
+                 <div>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase">Equipado:</p>
+                    <p className="font-black uppercase">{currentSkin.name}</p>
+                 </div>
+              </div>
+            </div>
+          )}
+
+          {gameState === 'MAPA' && (
+            <div className="absolute inset-0 bg-blue-600 flex flex-col items-center p-8 overflow-y-auto">
+              <button onClick={() => setGameState('IDLE')} className="absolute top-4 left-4 bg-white/20 p-2 px-4 rounded-full text-xs font-bold uppercase hover:bg-white/40">Voltar</button>
+              <h2 className="text-3xl font-black mb-8 uppercase italic text-white">Fases</h2>
+              <div className="flex flex-wrap justify-center gap-8">
+                {levelConfigs.map((cfg, i) => (
+                  <button key={i} disabled={i + 1 > unlockedLevels} onClick={() => resetGame(difficulty, i + 1)} className={`w-20 h-20 rounded-full flex items-center justify-center text-2xl font-black shadow-xl transition-transform active:scale-90 ${i + 1 <= unlockedLevels ? 'bg-yellow-400 text-yellow-900' : 'bg-slate-400 opacity-50 grayscale'}`}>
+                    {i + 1 > unlockedLevels ? '🔒' : i + 1}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {gameState === 'TREINAMENTO_MENU' && (
+            <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center p-8 gap-4">
+              <h2 className="text-2xl font-black text-cyan-400 uppercase mb-4">Dificuldade</h2>
+              {(Object.keys(DIFFICULTY_CONFIG) as DifficultyLevel[]).map(lv => (
+                <button key={lv} onClick={() => resetGame(lv)} className={`w-full py-4 rounded-xl font-black uppercase text-white shadow-lg transition-transform active:scale-95 ${DIFFICULTY_CONFIG[lv].color}`}>
+                  {DIFFICULTY_CONFIG[lv].label}
+                </button>
+              ))}
+              <button onClick={() => setGameState('IDLE')} className="mt-4 text-slate-500 font-bold uppercase text-sm hover:text-white">Cancelar</button>
+            </div>
+          )}
+
+          {gameState === 'GAMEOVER' && (
+            <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center text-center p-6 z-50">
+              <h2 className="text-6xl font-black mb-4 text-red-600 italic uppercase">FALHA</h2>
+              <p className="text-white/70 font-bold mb-4">Você foi esmagado pela precisão dos blocos.</p>
+              <p className="text-4xl font-black text-white mb-10">{score.toLocaleString()}</p>
+              <button onClick={() => setGameState('IDLE')} className="px-12 py-4 bg-white text-black font-black rounded-xl uppercase hover:scale-105 transition-transform">Menu</button>
+            </div>
+          )}
+
+          {gameState === 'VICTORY' && (
+            <div className="absolute inset-0 bg-emerald-600 flex flex-col items-center justify-center text-center p-6 z-50">
+              <h2 className="text-6xl font-black mb-4 text-white italic uppercase">VITÓRIA!</h2>
+              <p className="text-4xl font-black text-white mb-10">{score.toLocaleString()}</p>
+              <button onClick={() => setGameState('MAPA')} className="px-12 py-4 bg-white text-emerald-700 font-black rounded-xl uppercase hover:scale-105 transition-transform">Próxima Fase</button>
+            </div>
+          )}
+        </div>
       )}
+      
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+      `}</style>
     </div>
   );
 };
